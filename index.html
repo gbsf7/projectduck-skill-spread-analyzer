@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HAR Data Processor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        /* Simple spinner */
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid #fff;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 min-h-screen p-4 md:p-8">
+    <div class="max-w-7xl mx-auto">
+        
+        <h1 class="text-3xl font-bold text-white text-center mb-6">
+            Project Duck HAR Processor
+        </h1>
+        <p class="text-center text-gray-400 mb-8 max-w-2xl mx-auto">
+            This tool reads a `.har` file exported from the Network tab, automatically finds all skill names and run data, and generates a clean, shareable JSON.
+        </p>
+
+        <!-- Step 1: File Input -->
+        <div class="mb-6 bg-gray-800 p-6 rounded-lg">
+            <label for="harFileInput" class="block text-sm font-medium text-gray-300 mb-2">
+                Step 1: Upload your exported `.har` file
+            </label>
+            <input type="file" id="harFileInput" accept=".har" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700"/>
+        </div>
+
+        <!-- Step 2: Parse Button (THIS WAS MISSING) -->
+        <div class="text-center mb-6">
+            <button id="processHarButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors flex items-center justify-center mx-auto">
+                <span id="parseButtonText">Step 2: Process HAR File</span>
+                <div id="parseSpinner" class="spinner ml-3 hidden"></div>
+            </button>
+        </div>
+
+        <!-- Step 3 & 4: Filters and Generate Button -->
+        <div id="filterControls" class="hidden bg-gray-800 p-6 rounded-lg mb-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+                <label for="playerSelect" class="block text-sm font-medium text-gray-300 mb-2">
+                    Step 3: Select Player
+                </label>
+                <select id="playerSelect" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white"></select>
+            </div>
+            <div>
+                <label for="gateSelect" class="block text-sm font-medium text-gray-300 mb-2">
+                    Step 4: Select Gate
+                </label>
+                <select id="gateSelect" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white"></select>
+            </div>
+            <div class="md:mt-7">
+                <button id="generateJsonButton" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                    Step 5: Generate Clean JSON
+                </button>
+            </div>
+        </div>
+
+        <!-- NEW: Output Section (Table + JSON) -->
+        <div id="outputSection" class="hidden">
+            <!-- Step 5: Data Table -->
+            <h2 class="text-xl font-semibold text-white mb-4">
+                Data Table
+            </h2>
+            <div class="overflow-x-auto bg-gray-800 rounded-lg shadow mb-6">
+                <table class="w-full min-w-max text-sm text-left">
+                    <thead class="bg-gray-700 text-gray-300 uppercase text-xs">
+                        <tr>
+                            <th class="p-3">Skill Name</th>
+                            <th class="p-3 text-right">Damage</th>
+                            <th class="p-3 text-right">Percent</th>
+                            <th class="p-3 text-center">Crit/Hits</th>
+                            <th class="p-3 text-right">Crit Rate</th>
+                        </tr>
+                    </thead>
+                    <tbody id="outputTableBody" class="divide-y divide-gray-700">
+                        <!-- Rows will be injected here by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Step 6: JSON Output -->
+            <label for="output" class="block text-sm font-medium text-gray-300 mb-2">
+                Your Cleaned JSON Output
+            </label>
+            <textarea id="output" rows="15" class="w-full p-3 bg-gray-950 border border-gray-700 rounded-lg text-green-300 text-sm" readonly placeholder="Your cleaned JSON output will appear here..."></textarea>
+            <button id="copyButton" class="mt-4 bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition-colors hidden">
+                Copy to Clipboard
+            </button>
+            <p id="copyMessage" class="text-green-400 mt-2 h-4"></p>
+        </div>
+    </div>
+
+    <script>
+        const harFileInput = document.getElementById('harFileInput');
+        const processHarButton = document.getElementById('processHarButton');
+        const parseButtonText = document.getElementById('parseButtonText');
+        const parseSpinner = document.getElementById('parseSpinner');
+        
+        const filterControls = document.getElementById('filterControls');
+        const playerSelect = document.getElementById('playerSelect');
+        const gateSelect = document.getElementById('gateSelect');
+        const generateJsonButton = document.getElementById('generateJsonButton');
+        
+        const outputInput = document.getElementById('output');
+        const copyButton = document.getElementById('copyButton');
+        const copyMessage = document.getElementById('copyMessage');
+
+        let skillNameMap = new Map();
+        let fullRunData;
+        let skillDictionary = [];
+
+        function showStatus(message, isError = false) {
+            outputInput.value = message;
+            if (isError) {
+                console.error("HAR Processor Error:", message); // Log error to console
+                outputInput.classList.remove('text-green-300');
+                outputInput.classList.add('text-red-400', 'font-bold'); // Make error more visible
+            } else {
+                console.log("HAR Processor Status:", message); // Log status to console
+                outputInput.classList.remove('text-red-400', 'font-bold');
+                outputInput.classList.add('text-green-300');
+            }
+            // copyButton.classList.add('hidden'); // This is now inside outputSection
+            document.getElementById('outputSection').classList.add('hidden'); // Hide the entire output section
+            if (isError) {
+                filterControls.classList.add('hidden'); // Ensure controls are hidden on error
+            }
+        }
+        
+        function resetParseButton() {
+            parseButtonText.textContent = 'Step 2: Process HAR File';
+            parseSpinner.classList.add('hidden');
+            processHarButton.disabled = false;
+        }
+
+        processHarButton.addEventListener('click', () => {
+            const file = harFileInput.files[0];
+            if (!file) {
+                showStatus('Please select a .har file first.', true);
+                return;
+            }
+
+            // Show loading
+            parseButtonText.textContent = 'Processing...';
+            parseSpinner.classList.remove('hidden');
+            processHarButton.disabled = true;
+
+            // Clear previous state
+            showStatus('Reading file...');
+            skillNameMap = new Map();
+            skillDictionary = [];
+            fullRunData = null;
+            
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                setTimeout(() => { // Use timeout to allow UI to update
+                    try {
+                        const harData = JSON.parse(event.target.result);
+                        if (!harData.log || !harData.log.entries) {
+                            throw new Error('Invalid HAR file structure. "log" or "log.entries" not found.');
+                        }
+
+                        console.log(`HAR file loaded. Found ${harData.log.entries.length} network entries.`);
+
+                        // Loop through all network entries to find our data
+                        for (const entry of harData.log.entries) {
+                            const url = entry.request.url;
+                            
+                            // Ensure content exists before trying to access it
+                            if (entry.response && entry.response.content && entry.response.content.text) {
+                                const content = entry.response.content.text;
+
+                                // 1. Find Skill Dictionaries
+                                if (url.includes('virt.skilltable/')) {
+                                    try {
+                                        const skillNameData = JSON.parse(content);
+                                        skillDictionary.push(skillNameData);
+                                    } catch (e) {
+                                        console.warn('Found skilltable URL, but failed to parse content:', e);
+                                    }
+                                }
+                                // 2. Find the main Run Data
+                                else if (url.includes('/api/v2/game/dps/')) {
+                                    try {
+                                        const possibleRunData = JSON.parse(content);
+                                        // Check if this is the full run data object
+                                        if (possibleRunData.players && possibleRunData.gates) {
+                                            fullRunData = possibleRunData;
+                                        }
+                                    } catch (e) {
+                                        console.warn('Found dps URL, but failed to parse content:', e);
+                                    }
+                                }
+                            }
+                        }
+
+                        // --- After loop, check if we have what we need ---
+                        console.log(`Processing complete. Found ${skillDictionary.length} skill name entries.`);
+                        console.log(`Found main run data: ${!!fullRunData}`);
+
+
+                        // 3. Process Skill Dictionary
+                        if (skillDictionary.length === 0) {
+                            throw new Error('Could not find any Skill Name data (e.g., "virt.skilltable/...") in the HAR file. Make sure you loaded the "Skill Spread" tab on the website before exporting the HAR file.');
+                        }
+                        
+                        const firstSkill = skillDictionary[0] || {};
+                        const idKey = 'id'; // Key for the skill ID
+                        const nameKey = '_NameID_txt'; // Key for the skill name (based on your example)
+
+                        for (const item of skillDictionary) {
+                            if (item && item[idKey] !== undefined && item[nameKey] !== undefined) {
+                                skillNameMap.set(item[idKey], item[nameKey]);
+                            }
+                        }
+
+                        if (skillNameMap.size === 0) {
+                            throw new Error(`Could not build skill name map. Using keys: idKey='${idKey}', nameKey='${nameKey}'. No valid skill name objects found.`);
+                        }
+                        
+                        // 4. Check for Run Data
+                        if (!fullRunData) {
+                            throw new Error('Could not find the Full Run Data (e.g., ".../api/v2/game/dps/...") in the HAR file. Make sure the main run page loaded correctly before exporting.');
+                        }
+
+                        // 5. Populate Dropdowns
+                        playerSelect.innerHTML = '';
+                        gateSelect.innerHTML = '';
+                        
+                        fullRunData.players.forEach(player => {
+                            const option = document.createElement('option');
+                            option.value = player.id;
+                            option.textContent = player.name;
+                            playerSelect.appendChild(option);
+                        });
+
+                        fullRunData.gates.forEach(gate => {
+                            const option = document.createElement('option');
+                            option.value = gate.id;
+                            option.textContent = gate.name;
+                            gateSelect.appendChild(option);
+                        });
+
+                        // Show filters
+                        filterControls.classList.remove('hidden');
+                        showStatus('HAR file processed successfully. Please select a player and gate, then click "Generate".');
+
+                    } catch (e) {
+                        showStatus(`Error processing HAR file:\n${e.name}: ${e.message}`, true);
+                    } finally {
+                        resetParseButton();
+                    }
+                }, 50); // 50ms timeout
+            };
+            
+            reader.onerror = () => {
+                showStatus('Error reading file.', true);
+                resetParseButton();
+            };
+            
+            reader.readAsText(file);
+        });
+        
+        generateJsonButton.addEventListener('click', () => {
+            try {
+                const selectedPlayerId = parseInt(playerSelect.value, 10);
+                const selectedGateId = gateSelect.value;
+                
+                const tableBody = document.getElementById('outputTableBody');
+                const outputSection = document.getElementById('outputSection');
+                
+                // Clear previous results
+                tableBody.innerHTML = '';
+                outputInput.value = '';
+
+                // Find the selected gate
+                const gate = fullRunData.gates.find(g => g.id === selectedGateId);
+                if (!gate) throw new Error("Could not find selected gate.");
+
+                // Find the selected player's data within that gate
+                const playerData = gate.players.find(p => p.id === selectedPlayerId);
+                if (!playerData) throw new Error("Could not find selected player's data for this gate.");
+
+                const totalDamage = parseInt(playerData.damageDealt, 10);
+                if (isNaN(totalDamage) || totalDamage === 0) {
+                    showStatus('Total damage for this player/gate is 0. Cannot calculate percentages.', true);
+                    outputInput.value = "[]";
+                    tableBody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-gray-400">Total damage is 0. No table to display.</td></tr>';
+                    outputSection.classList.remove('hidden');
+                    copyButton.classList.remove('hidden');
+                    return;
+                }
+                
+                // Process skills
+                const finalData = playerData.skills.map(skill => {
+                    const skillId = skill.id;
+                    const skillName = skillNameMap.get(skillId) || `Skill ${skillId}`; // Fallback
+                    
+                    const damage = parseInt(skill.damage, 10);
+                    const percent = (damage / totalDamage) * 100;
+                    
+                    // hitCounts = [miss, crit, normal, block, resist]
+                    const hitCounts = skill.hitCounts || [0, 0, 0, 0, 0];
+                    const critHits = hitCounts[1]; 
+                    const normalHits = hitCounts[2];
+                    
+                    // Total hits for the crit_hits string (all hits)
+                    const totalHits = hitCounts.reduce((a, b) => a + b, 0);
+                    const critHitsStr = `${critHits} / ${totalHits}`;
+                    
+                    // Crit Rate = (crit hits) / (crit hits + normal hits)
+                    const critabbleHits = critHits + normalHits;
+                    const critRate = (critabbleHits > 0) ? (critHits / critabbleHits) * 100 : 0;
+
+                    return {
+                        name: skillName,
+                        damage: damage,
+                        percent: parseFloat(percent.toFixed(2)), // Clean up to 2 decimal places
+                        crit_hits: critHitsStr,
+                        crit_rate: parseFloat(critRate.toFixed(2)) // Clean up to 2 decimal places
+                    };
+                });
+                
+                // Sort by damage, descending
+                finalData.sort((a, b) => b.damage - a.damage);
+
+                // --- NEW: Populate the table ---
+                finalData.forEach(skill => {
+                    const row = document.createElement('tr');
+                    row.className = 'hover:bg-gray-700 transition-colors';
+                    
+                    row.innerHTML = `
+                        <td class="p-3 font-medium whitespace-nowrap">${skill.name}</td>
+                        <td class="p-3 text-right text-yellow-400 font-mono">${skill.damage.toLocaleString()}</td>
+                        <td class="p-3 text-right font-mono">${skill.percent.toFixed(2)}%</td>
+                        <td class="p-3 text-center font-mono">${skill.crit_hits}</td>
+                        <td class="p-3 text-right font-mono">${skill.crit_rate.toFixed(2)}%</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+                // --- End of new table logic ---
+
+                // Display the final JSON
+                outputInput.value = JSON.stringify(finalData, null, 2);
+                outputInput.classList.remove('text-red-400', 'font-bold');
+                outputInput.classList.add('text-green-300');
+                
+                // Show the entire output section (table + JSON)
+                outputSection.classList.remove('hidden');
+                copyButton.classList.remove('hidden');
+
+            } catch (e) {
+                showStatus(`Error generating JSON:\n${e.name}: ${e.message}`, true);
+            }
+        });
+
+        copyButton.addEventListener('click', () => {
+            outputInput.select();
+            document.execCommand('copy');
+            copyMessage.textContent = 'Copied to clipboard!';
+            setTimeout(() => { copyMessage.textContent = ''; }, 2000);
+        });
+
+    </script>
+</body>
+</html>
